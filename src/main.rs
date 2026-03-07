@@ -122,6 +122,12 @@ async fn index(State(state): State<AppState>) -> Html<String> {
     footer a {{ color: #666; }}
     footer a:hover {{ color: var(--accent); }}
   </style>
+  <!-- Privacy-friendly analytics by Plausible -->
+  <script async src="https://analytics.seraph.ws/js/pa-p8pHwjggKya5Vyjukouh3.js"></script>
+  <script>
+    window.plausible=window.plausible||function(){{(plausible.q=plausible.q||[]).push(arguments)}},plausible.init=plausible.init||function(i){{plausible.o=i||{{}}}};
+    plausible.init()
+  </script>
 </head>
 <body>
   <header>
@@ -317,6 +323,12 @@ async fn admin_page(
     input { background: #111; color: #e0e0e0; border: 1px solid #ff2d78; padding: 4px 8px; font-family: monospace; width: 300px; }
     .submit { background: #ff2d78; color: #0a0a0a; border: none; padding: 5px 12px; cursor: pointer; font-family: monospace; }
   </style>
+  <!-- Privacy-friendly analytics by Plausible -->
+  <script async src="https://analytics.seraph.ws/js/pa-p8pHwjggKya5Vyjukouh3.js"></script>
+  <script>
+    window.plausible=window.plausible||function(){{(plausible.q=plausible.q||[]).push(arguments)}},plausible.init=plausible.init||function(i){{plausible.o=i||{{}}}};
+    plausible.init()
+  </script>
 </head>
 <body>
   <h1>seraph / admin</h1>
