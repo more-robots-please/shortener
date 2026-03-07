@@ -40,6 +40,7 @@ struct AppState {
     db: PgPool,
     base_url: String,
     admin_token: String,
+    banned_words: Vec<String>,
 }
 
 // ── Main ─────────────────────────────────────────────────────────────
@@ -58,8 +59,14 @@ async fn main() {
         .await
         .expect("Failed to connect to database");
 
-    let state = AppState { db, base_url, admin_token };
+    let banned_words = std::fs::read_to_string("banned_words.txt")
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.trim().to_lowercase())
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<String>>();
 
+    let state = AppState { db, base_url, admin_token, banned_words };
     let app = Router::new()
         .route("/", get(index))
         .route("/:code", get(redirect))
@@ -85,7 +92,8 @@ async fn index(State(state): State<AppState>) -> Html<String> {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>seraph / s</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/hack-font@3/build/web/hack.css">
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/hack-font@3/build/web/hack.css">
   <style>
     :root {{ --background: #0a0a0a; --color: #e0e0e0; --accent: #ff2d78; }}
     * {{ box-sizing: border-box; margin: 0; padding: 0; }}
@@ -204,6 +212,12 @@ async fn shorten(
         }
         _ => nanoid!(6),
     };
+    
+    // Check against banned words
+    let code_lower = code.to_lowercase();
+    if state.banned_words.iter().any(|w| code_lower.contains(w.as_str())) {
+        return (StatusCode::BAD_REQUEST, "That code is not allowed").into_response();
+    }
 
     // Return existing link if URL already shortened
     let existing = sqlx::query_as::<_, Link>(

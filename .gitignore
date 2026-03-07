@@ -1,1 +1,3 @@
 /target
+.env
+banned_words.txt
