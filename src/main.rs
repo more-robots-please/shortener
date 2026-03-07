@@ -154,12 +154,18 @@ async fn index(State(state): State<AppState>) -> Html<String> {
       const text = await res.text();
       if (res.ok) {{
         const data = JSON.parse(text);
-        result.innerHTML = '> <a href="/' + data.code + '">{base_url}/' + data.code + '</a>';
+        const shortUrl = '{base_url}/' + data.code;
+        result.innerHTML = '> <a href="/' + data.code + '">' + shortUrl + '</a> <button onclick="copy(this, \'' + shortUrl + '\')" style="padding:2px 8px;font-size:0.8rem">copy</button>';
         result.className = '';
       }} else {{
         result.textContent = '> error: ' + text;
         result.className = 'error';
       }}
+    }}
+    async function copy(btn, text) {{
+        await navigator.clipboard.writeText(text);
+        btn.textContent = 'copied!';
+        setTimeout(() => btn.textContent = 'copy', 1500);
     }}
     document.addEventListener('keydown', e => {{ if (e.key === 'Enter') shorten(); }});
   </script>
