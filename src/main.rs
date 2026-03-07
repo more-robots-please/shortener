@@ -185,15 +185,50 @@ async fn redirect(
     }
 }
 
+async fn resolve_url(url: &str) -> Result<String, &'static str> {
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|_| "Failed to build HTTP client")?;
+
+    // If http, try upgrading to https first
+    let upgraded = if url.starts_with("http://") {
+        let https_url = url.replacen("http://", "https://", 1);
+        match client.head(&https_url).send().await {
+            Ok(res) if res.status().is_success() || res.status().is_redirection() => https_url,
+            _ => url.to_string(),
+        }
+    } else {
+        url.to_string()
+    };
+
+    // Verify the URL actually resolves
+    match client.head(&upgraded).send().await {
+        Ok(res) if res.status().as_u16() < 500 => Ok(upgraded),
+        Ok(_) => Err("URL returned a server error"),
+        Err(_) => Err("URL could not be reached"),
+    }
+}
+
 async fn shorten(
     State(state): State<AppState>,
     Json(payload): Json<ShortenRequest>,
 ) -> impl IntoResponse {
     // Validate URL
-    let url = payload.url.trim().to_string();
-    if !url.starts_with("http://") && !url.starts_with("https://") {
-        return (StatusCode::BAD_REQUEST, "URL must start with http:// or https://").into_response();
-    }
+    let raw_url = {
+        let trimmed = payload.url.trim();
+        if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+            format!("https://{}", trimmed)
+        } else {
+            trimmed.to_string()
+        }
+    };
+        let url = match resolve_url(&raw_url).await {
+        Ok(u) => u,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+    };
+
     if url.len() > 2048 {
         return (StatusCode::BAD_REQUEST, "URL too long").into_response();
     }

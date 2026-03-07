@@ -17,3 +17,4 @@ tracing-subscriber = "0.3"
 dotenvy = "0.15"
 nanoid = "0.4"
 chrono = { version = "0.4", features = ["serde"] }
+reqwest = { version = "0.11", features = ["rustls-tls"], default-features = false }
