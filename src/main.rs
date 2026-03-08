@@ -10,6 +10,7 @@ use nanoid::nanoid;
 use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::env;
+use tower_http::services::ServeDir;
 
 // ── Database model ──────────────────────────────────────────────────
 #[derive(Serialize, sqlx::FromRow)]
@@ -78,6 +79,7 @@ async fn main() {
         .route("/admin", get(admin_page))
         .route("/admin/links", get(list_links))
         .route("/admin/links/:id", delete(delete_link))
+        .nest_service("/static", ServeDir::new("static"))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
@@ -97,41 +99,10 @@ async fn index(State(state): State<AppState>) -> Html<String> {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>seraph / s</title>
   <link rel="icon" type="image/png" href="/favicon.png">
-  <link rel="apple-touch-icon" href="/apple-touch-icon.png">  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/hack-font@3/build/web/hack.css">
-  <style>
-    :root {{ --background: #0a0a0a; --color: #e0e0e0; --accent: #ff2d78; }}
-    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-    body {{ background: var(--background); color: var(--color); font-family: 'Hack', monospace; min-height: 100vh; display: flex; flex-direction: column; }}
-    header {{ display: flex; align-items: center; gap: 1rem; padding: 1rem 2rem; }}
-    .logo {{ background: var(--accent); color: var(--background); font-weight: bold; padding: 5px 10px; text-decoration: none; box-shadow: 0 0 8px #ff2d78, 0 0 16px #ff2d7844; }}
-    .barcode {{ flex: 1; background: repeating-linear-gradient(90deg, var(--accent), var(--accent) 4px, transparent 0, transparent 10px); min-height: 28px; filter: drop-shadow(0 0 4px #ff2d78); }}
-    main {{ flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 4rem 2rem; text-align: center; gap: 1.5rem; }}
-    h1 {{ color: var(--accent); font-size: 2rem; text-shadow: 0 0 12px #ff2d7888; }}
-    p {{ color: #888; font-size: 0.9rem; }}
-    .prompt::before {{ content: '> '; color: var(--accent); }}
-    .shorten-form {{ display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: center; margin-top: 0.5rem; }}
-    input {{ background: #111; color: var(--color); border: 1px solid #ff2d78; padding: 8px 12px; font-family: 'Hack', monospace; font-size: 0.9rem; outline: none; }}
-    input:focus {{ box-shadow: 0 0 8px #ff2d7866; }}
-    input#url {{ width: 320px; }}
-    input#code {{ width: 160px; }}
-    button {{ background: var(--accent); color: var(--background); border: none; padding: 8px 18px; cursor: pointer; font-family: 'Hack', monospace; font-size: 0.9rem; transition: box-shadow 0.2s; }}
-    button:hover {{ box-shadow: 0 0 12px #ff2d78, 0 0 24px #ff2d7866; }}
-    #result {{ font-size: 0.85rem; min-height: 1.2rem; }}
-    #result a {{ color: var(--accent); text-decoration: none; }}
-    #result a:hover {{ text-shadow: 0 0 8px #ff2d78; }}
-    #result.error {{ color: #ff6b6b; }}
-    a {{ color: var(--accent); text-decoration: none; }}
-    a:hover {{ text-shadow: 0 0 8px #ff2d78; }}
-    footer {{ text-align: center; padding: 1rem; color: #444; font-size: 0.8rem; border-top: 1px solid #1a1a1a; }}
-    footer a {{ color: #666; }}
-    footer a:hover {{ color: var(--accent); }}
-  </style>
-  <!-- Privacy-friendly analytics by Plausible -->
-  <script async src="https://analytics.seraph.ws/js/pa-p8pHwjggKya5Vyjukouh3.js"></script>
-  <script>
-    window.plausible=window.plausible||function(){{(plausible.q=plausible.q||[]).push(arguments)}},plausible.init=plausible.init||function(i){{plausible.o=i||{{}}}};
-    plausible.init()
-  </script>
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/hack-font@3/build/web/hack.css">
+  <link rel="stylesheet" href="/static/index.css">
+  <script>window.BASE_URL = "{base_url}";</script>
 </head>
 <body>
   <header>
@@ -146,7 +117,7 @@ async fn index(State(state): State<AppState>) -> Html<String> {
       <input id="code" type="text" placeholder="custom code (optional)" autocomplete="off" />
       <div style="display:flex;gap:0.5rem;align-items:center">
         <input id="expires-value" type="number" placeholder="expires after..." autocomplete="off" min="1" step="1" style="width:160px" />
-        <select id="expires-unit" style="background:#111;color:#e0e0e0;border:1px solid #ff2d78;padding:8px 10px;font-family:'Hack',monospace;font-size:0.9rem;outline:none">
+        <select id="expires-unit">
           <option value="1">minutes</option>
           <option value="60" selected>hours</option>
           <option value="1440">days</option>
@@ -159,45 +130,8 @@ async fn index(State(state): State<AppState>) -> Html<String> {
     <p><a href="https://seraph.ws">← back to seraph.ws</a></p>
   </main>
   <footer><a href="https://seraph.ws">seraph.ws</a></footer>
-  <script>
-    async function shorten() {{
-      const url = document.getElementById('url').value.trim();
-      const code = document.getElementById('code').value.trim();
-      const result = document.getElementById('result');
-      if (!url) {{ result.textContent = 'please enter a url'; result.className = 'error'; return; }}
-      const res = await fetch('/api/shorten', {{
-        method: 'POST',
-        headers: {{ 'Content-Type': 'application/json' }},
-        body: JSON.stringify({{
-          url,
-          code: code || null,
-          expires_in_minutes: (function() {{
-            const val = parseInt(document.getElementById('expires-value').value);
-            const unit = parseInt(document.getElementById('expires-unit').value);
-            if (!val || val < 1) return null;
-            return Math.min(val * unit, 10080);
-          }})(),
-          max_clicks: document.getElementById('max-clicks').value ? parseInt(document.getElementById('max-clicks').value) : null
-        }})
-      }});
-      const text = await res.text();
-      if (res.ok) {{
-        const data = JSON.parse(text);
-        const shortUrl = '{base_url}/' + data.code;
-        result.innerHTML = '> <a href="/' + data.code + '">' + shortUrl + '</a> <button onclick="copy(this, \'' + shortUrl + '\')" style="padding:2px 8px;font-size:0.8rem">copy</button>';
-        result.className = '';
-      }} else {{
-        result.textContent = '> error: ' + text;
-        result.className = 'error';
-      }}
-    }}
-    async function copy(btn, text) {{
-        await navigator.clipboard.writeText(text);
-        btn.textContent = 'copied!';
-        setTimeout(() => btn.textContent = 'copy', 1500);
-    }}
-    document.addEventListener('keydown', e => {{ if (e.key === 'Enter') shorten(); }});
-  </script>
+  <script src="/static/index.js"></script>
+  <script async src="https://analytics.seraph.ws/js/pa-p8pHwjggKya5Vyjukouh3.js"></script>
 </body>
 </html>"#, base_url = state.base_url))
 }
@@ -251,20 +185,7 @@ fn expired_page() -> Html<&'static str> {
   <title>seraph / link expired</title>
   <link rel="icon" type="image/png" href="/favicon.png">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/hack-font@3/build/web/hack.css">
-  <style>
-    :root { --background: #0a0a0a; --color: #e0e0e0; --accent: #ff2d78; }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: var(--background); color: var(--color); font-family: 'Hack', monospace; min-height: 100vh; display: flex; flex-direction: column; }
-    header { display: flex; align-items: center; gap: 1rem; padding: 1rem 2rem; }
-    .logo { background: var(--accent); color: var(--background); font-weight: bold; padding: 5px 10px; text-decoration: none; box-shadow: 0 0 8px #ff2d78, 0 0 16px #ff2d7844; }
-    .barcode { flex: 1; background: repeating-linear-gradient(90deg, var(--accent), var(--accent) 4px, transparent 0, transparent 10px); min-height: 28px; filter: drop-shadow(0 0 4px #ff2d78); opacity: 0.4; }
-    main { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 4rem 2rem; text-align: center; gap: 1rem; }
-    h1 { color: var(--accent); font-size: 2rem; text-shadow: 0 0 12px #ff2d7888; }
-    p { color: #888; font-size: 0.9rem; }
-    a { color: var(--accent); text-decoration: none; }
-    a:hover { text-shadow: 0 0 8px #ff2d78; }
-    .prompt::before { content: '> '; color: var(--accent); }
-  </style>
+  <link rel="stylesheet" href="/static/error.css">
 </head>
 <body>
   <header>
@@ -289,20 +210,7 @@ fn not_found_page() -> Html<&'static str> {
   <title>seraph / not found</title>
   <link rel="icon" type="image/png" href="/favicon.png">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/hack-font@3/build/web/hack.css">
-  <style>
-    :root { --background: #0a0a0a; --color: #e0e0e0; --accent: #ff2d78; }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: var(--background); color: var(--color); font-family: 'Hack', monospace; min-height: 100vh; display: flex; flex-direction: column; }
-    header { display: flex; align-items: center; gap: 1rem; padding: 1rem 2rem; }
-    .logo { background: var(--accent); color: var(--background); font-weight: bold; padding: 5px 10px; text-decoration: none; box-shadow: 0 0 8px #ff2d78, 0 0 16px #ff2d7844; }
-    .barcode { flex: 1; background: repeating-linear-gradient(90deg, var(--accent), var(--accent) 4px, transparent 0, transparent 10px); min-height: 28px; filter: drop-shadow(0 0 4px #ff2d78); opacity: 0.4; }
-    main { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 4rem 2rem; text-align: center; gap: 1rem; }
-    h1 { color: var(--accent); font-size: 2rem; text-shadow: 0 0 12px #ff2d7888; }
-    p { color: #888; font-size: 0.9rem; }
-    a { color: var(--accent); text-decoration: none; }
-    a:hover { text-shadow: 0 0 8px #ff2d78; }
-    .prompt::before { content: '> '; color: var(--accent); }
-  </style>
+  <link rel="stylesheet" href="/static/error.css">
 </head>
 <body>
   <header>
@@ -317,6 +225,7 @@ fn not_found_page() -> Html<&'static str> {
 </body>
 </html>"#)
 }
+
 
 async fn resolve_url(url: &str) -> Result<String, &'static str> {
     let client = reqwest::Client::builder()
@@ -434,117 +343,31 @@ async fn shorten(
     }
 }
 
-async fn admin_page(
-    State(_state): State<AppState>,
-) -> impl IntoResponse {
-        Html(r#"<!DOCTYPE html>
-<html>
+async fn admin_page() -> Html<&'static str> {
+    Html(r#"<!DOCTYPE html>
+<html lang="en">
 <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>seraph / admin</title>
-  <style>
-    button:hover { box-shadow: 0 0 10px #ff2d78, 0 0 20px #ff2d7866; }
-    a:hover { text-shadow: 0 0 8px #ff2d78; }
-    body { background: #0a0a0a; color: #e0e0e0; font-family: monospace; padding: 2rem; }
-    h1 { color: #ff2d78; }
-    table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
-    th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid #333; }
-    th { color: #ff2d78; }
-    a { color: #ff2d78; }
-    button { background: #ff2d78; color: #0a0a0a; border: none; padding: 4px 10px; cursor: pointer; font-family: monospace; }
-    button:hover { background: #ff69b4; }
-    .form { margin-bottom: 2rem; }
-    input { background: #111; color: #e0e0e0; border: 1px solid #ff2d78; padding: 4px 8px; font-family: monospace; width: 300px; }
-    .submit { background: #ff2d78; color: #0a0a0a; border: none; padding: 5px 12px; cursor: pointer; font-family: monospace; }
-  </style>
-  <!-- Privacy-friendly analytics by Plausible -->
-  <script async src="https://analytics.seraph.ws/js/pa-p8pHwjggKya5Vyjukouh3.js"></script>
-  <script>
-    window.plausible=window.plausible||function(){{(plausible.q=plausible.q||[]).push(arguments)}},plausible.init=plausible.init||function(i){{plausible.o=i||{{}}}};
-    plausible.init()
-  </script>
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/hack-font@3/build/web/hack.css">
+  <link rel="stylesheet" href="/static/admin.css">
 </head>
 <body>
   <h1>seraph / admin</h1>
   <div class="form">
-    <h2>shorten a url</h2>
     <input id="url" placeholder="https://example.com" />
     <input id="code" placeholder="custom code (optional)" style="width:180px" />
-    <button class="submit" onclick="shorten()">shorten</button>
-    <p id="result"></p>
+    <button onclick="shorten()">shorten</button>
   </div>
+  <div id="result"></div>
   <h2>all links</h2>
-  <table id="links-table">
-    <tr><th>code</th><th>url</th><th>clicks</th><th>created</th><th></th></tr>
-  </table>
-    <script>
-        let TOKEN = localStorage.getItem('admin_token');
-    
-        if (!TOKEN) {
-          document.body.innerHTML = `
-            <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:1rem;">
-              <h1 style="color:#ff2d78">seraph / admin</h1>
-              <input id="token-input" type="text" placeholder="admin token" autocomplete="off"
-              <button onclick="login()" 
-                style="background:#ff2d78;color:#0a0a0a;border:none;padding:8px 20px;cursor:pointer;font-family:monospace;font-size:1rem">
-                enter
-              </button>
-            </div>`;
-        } else {
-          loadLinks();
-        }
-    
-        function login() {
-          TOKEN = document.getElementById('token-input').value;
-          localStorage.setItem('admin_token', TOKEN);
-          location.reload();
-        }
-    
-        async function loadLinks() {
-          const res = await fetch("/admin/links", {
-            headers: { "Authorization": "Bearer " + TOKEN }
-          });
-          if (res.status === 401) {
-            localStorage.removeItem('admin_token');
-            location.reload();
-            return;
-          }
-          const links = await res.json();
-          const table = document.getElementById("links-table");
-          table.innerHTML = "<tr><th>code</th><th>url</th><th>clicks</th><th>created</th><th></th></tr>";
-          for (const l of links) {
-            table.innerHTML += `<tr>
-              <td><a href="/${l.code}">${l.code}</a></td>
-              <td><a href="${l.url}" target="_blank">${l.url.substring(0,50)}${l.url.length>50?"...":""}</a></td>
-              <td>${l.clicks}</td>
-              <td>${new Date(l.created_at).toLocaleDateString()}</td>
-              <td><button onclick="del(${l.id})">delete</button></td>
-            </tr>`;
-          }
-        }
-    
-        async function shorten() {
-          const url = document.getElementById("url").value;
-          const code = document.getElementById("code").value;
-          const res = await fetch("/api/shorten", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "Authorization": "Bearer " + TOKEN },
-            body: JSON.stringify({ url, code: code || null })
-          });
-          const data = await res.json();
-          document.getElementById("result").textContent = res.ok ? "shortened: " + data.short_url : "error: " + JSON.stringify(data);
-          if (res.ok) loadLinks();
-        }
-    
-        async function del(id) {
-          await fetch("/admin/links/" + id, {
-            method: "DELETE",
-            headers: { "Authorization": "Bearer " + TOKEN }
-          });
-          loadLinks();
-        }
-    </script>
+  <table id="links-table"></table>
+  <script src="/static/admin.js"></script>
+  <script async src="https://analytics.seraph.ws/js/pa-p8pHwjggKya5Vyjukouh3.js"></script>
 </body>
-</html>"#).into_response()
+</html>"#)
 }
 
 async fn list_links(

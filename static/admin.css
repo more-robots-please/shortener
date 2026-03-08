@@ -1,0 +1,21 @@
+:root { --background: #0a0a0a; --color: #e0e0e0; --accent: #ff2d78; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--background); color: var(--color); font-family: 'Hack', monospace; padding: 2rem; }
+h1, h2 { color: var(--accent); margin-bottom: 1rem; }
+h2 { font-size: 1rem; margin-top: 2rem; }
+table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid #333; }
+th { color: var(--accent); }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-shadow: 0 0 8px #ff2d78; }
+button { background: var(--accent); color: var(--background); border: none; padding: 4px 10px; cursor: pointer; font-family: 'Hack', monospace; }
+button:hover { box-shadow: 0 0 10px #ff2d78, 0 0 20px #ff2d7866; }
+input { background: #111; color: var(--color); border: 1px solid #ff2d78; padding: 4px 8px; font-family: 'Hack', monospace; width: 300px; outline: none; }
+input:focus { box-shadow: 0 0 8px #ff2d7866; }
+.form { margin-bottom: 2rem; display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+#result { margin-top: 1rem; font-size: 0.9rem; color: #888; }
+.login { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; gap: 1rem; }
+.login h1 { font-size: 2rem; }
+.login input { width: 260px; padding: 8px 12px; font-size: 1rem; }
+.login button { padding: 8px 20px; font-size: 1rem; }
+.expired-badge { color: #555; font-size: 0.8rem; }

@@ -1,0 +1,12 @@
+:root { --background: #0a0a0a; --color: #e0e0e0; --accent: #ff2d78; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--background); color: var(--color); font-family: 'Hack', monospace; min-height: 100vh; display: flex; flex-direction: column; }
+header { display: flex; align-items: center; gap: 1rem; padding: 1rem 2rem; }
+.logo { background: var(--accent); color: var(--background); font-weight: bold; padding: 5px 10px; text-decoration: none; box-shadow: 0 0 8px #ff2d78, 0 0 16px #ff2d7844; }
+.barcode { flex: 1; background: repeating-linear-gradient(90deg, var(--accent), var(--accent) 4px, transparent 0, transparent 10px); min-height: 28px; filter: drop-shadow(0 0 4px #ff2d78); opacity: 0.4; }
+main { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 4rem 2rem; text-align: center; gap: 1rem; }
+h1 { color: var(--accent); font-size: 2rem; text-shadow: 0 0 12px #ff2d7888; }
+p { color: #888; font-size: 0.9rem; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-shadow: 0 0 8px #ff2d78; }
+.prompt::before { content: '> '; color: var(--accent); }
