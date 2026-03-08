@@ -19,13 +19,17 @@ struct Link {
     url: String,
     clicks: i32,
     created_at: chrono::DateTime<chrono::Utc>,
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    max_clicks: Option<i32>,
 }
 
 // ── Request/response types ───────────────────────────────────────────
 #[derive(Deserialize)]
 struct ShortenRequest {
     url: String,
-    code: Option<String>, // optional custom code
+    code: Option<String>,
+    expires_in_minutes: Option<i64>,
+    max_clicks: Option<i32>,
 }
 
 #[derive(Serialize)]
@@ -140,6 +144,15 @@ async fn index(State(state): State<AppState>) -> Html<String> {
     <div class="shorten-form">
       <input id="url" type="url" placeholder="https://example.com" autocomplete="off" />
       <input id="code" type="text" placeholder="custom code (optional)" autocomplete="off" />
+      <div style="display:flex;gap:0.5rem;align-items:center">
+        <input id="expires-value" type="number" placeholder="expires after..." autocomplete="off" min="1" step="1" style="width:160px" />
+        <select id="expires-unit" style="background:#111;color:#e0e0e0;border:1px solid #ff2d78;padding:8px 10px;font-family:'Hack',monospace;font-size:0.9rem;outline:none">
+          <option value="1">minutes</option>
+          <option value="60" selected>hours</option>
+          <option value="1440">days</option>
+        </select>
+      </div>
+      <input id="max-clicks" type="number" placeholder="max clicks (optional)" autocomplete="off" min="1" style="width:180px" />
       <button onclick="shorten()">shorten</button>
     </div>
     <div id="result"></div>
@@ -155,7 +168,17 @@ async fn index(State(state): State<AppState>) -> Html<String> {
       const res = await fetch('/api/shorten', {{
         method: 'POST',
         headers: {{ 'Content-Type': 'application/json' }},
-        body: JSON.stringify({{ url, code: code || null }})
+        body: JSON.stringify({{
+          url,
+          code: code || null,
+          expires_in_minutes: (function() {{
+            const val = parseInt(document.getElementById('expires-value').value);
+            const unit = parseInt(document.getElementById('expires-unit').value);
+            if (!val || val < 1) return null;
+            return Math.min(val * unit, 10080);
+          }})(),
+          max_clicks: document.getElementById('max-clicks').value ? parseInt(document.getElementById('max-clicks').value) : null
+        }})
       }});
       const text = await res.text();
       if (res.ok) {{
@@ -184,17 +207,115 @@ async fn redirect(
     State(state): State<AppState>,
 ) -> impl IntoResponse {
     let result = sqlx::query_as::<_, Link>(
-        "UPDATE links SET clicks = clicks + 1 WHERE code = $1 RETURNING *"
+        "SELECT * FROM links WHERE code = $1"
     )
     .bind(&code)
     .fetch_optional(&state.db)
     .await;
 
     match result {
-        Ok(Some(link)) => Redirect::permanent(&link.url).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "Link not found").into_response(),
+        Ok(Some(link)) => {
+            // Check time expiry
+            if let Some(expires_at) = link.expires_at {
+                if chrono::Utc::now() > expires_at {
+                    return expired_page().into_response();
+                }
+            }
+            // Check click limit
+            if let Some(max) = link.max_clicks {
+                if link.clicks >= max {
+                    return expired_page().into_response();
+                }
+            }
+            // Increment clicks and redirect
+            let _ = sqlx::query(
+                "UPDATE links SET clicks = clicks + 1 WHERE code = $1"
+            )
+            .bind(&code)
+            .execute(&state.db)
+            .await;
+
+            Redirect::permanent(&link.url).into_response()
+        }
+        Ok(None) => (StatusCode::NOT_FOUND, not_found_page()).into_response(),
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response(),
     }
+}
+
+fn expired_page() -> Html<&'static str> {
+    Html(r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>seraph / link expired</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/hack-font@3/build/web/hack.css">
+  <style>
+    :root { --background: #0a0a0a; --color: #e0e0e0; --accent: #ff2d78; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--background); color: var(--color); font-family: 'Hack', monospace; min-height: 100vh; display: flex; flex-direction: column; }
+    header { display: flex; align-items: center; gap: 1rem; padding: 1rem 2rem; }
+    .logo { background: var(--accent); color: var(--background); font-weight: bold; padding: 5px 10px; text-decoration: none; box-shadow: 0 0 8px #ff2d78, 0 0 16px #ff2d7844; }
+    .barcode { flex: 1; background: repeating-linear-gradient(90deg, var(--accent), var(--accent) 4px, transparent 0, transparent 10px); min-height: 28px; filter: drop-shadow(0 0 4px #ff2d78); opacity: 0.4; }
+    main { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 4rem 2rem; text-align: center; gap: 1rem; }
+    h1 { color: var(--accent); font-size: 2rem; text-shadow: 0 0 12px #ff2d7888; }
+    p { color: #888; font-size: 0.9rem; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-shadow: 0 0 8px #ff2d78; }
+    .prompt::before { content: '> '; color: var(--accent); }
+  </style>
+</head>
+<body>
+  <header>
+    <a class="logo" href="https://seraph.ws">seraph</a>
+    <div class="barcode"></div>
+  </header>
+  <main>
+    <h1>link expired</h1>
+    <p class="prompt">this link is no longer active</p>
+    <p><a href="https://s.seraph.ws">← shorten a new link</a></p>
+  </main>
+</body>
+</html>"#)
+}
+
+fn not_found_page() -> Html<&'static str> {
+    Html(r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>seraph / not found</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/hack-font@3/build/web/hack.css">
+  <style>
+    :root { --background: #0a0a0a; --color: #e0e0e0; --accent: #ff2d78; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--background); color: var(--color); font-family: 'Hack', monospace; min-height: 100vh; display: flex; flex-direction: column; }
+    header { display: flex; align-items: center; gap: 1rem; padding: 1rem 2rem; }
+    .logo { background: var(--accent); color: var(--background); font-weight: bold; padding: 5px 10px; text-decoration: none; box-shadow: 0 0 8px #ff2d78, 0 0 16px #ff2d7844; }
+    .barcode { flex: 1; background: repeating-linear-gradient(90deg, var(--accent), var(--accent) 4px, transparent 0, transparent 10px); min-height: 28px; filter: drop-shadow(0 0 4px #ff2d78); opacity: 0.4; }
+    main { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 4rem 2rem; text-align: center; gap: 1rem; }
+    h1 { color: var(--accent); font-size: 2rem; text-shadow: 0 0 12px #ff2d7888; }
+    p { color: #888; font-size: 0.9rem; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-shadow: 0 0 8px #ff2d78; }
+    .prompt::before { content: '> '; color: var(--accent); }
+  </style>
+</head>
+<body>
+  <header>
+    <a class="logo" href="https://seraph.ws">seraph</a>
+    <div class="barcode"></div>
+  </header>
+  <main>
+    <h1>404</h1>
+    <p class="prompt">that link doesn't exist</p>
+    <p><a href="https://s.seraph.ws">← shorten a new link</a></p>
+  </main>
+</body>
+</html>"#)
 }
 
 async fn resolve_url(url: &str) -> Result<String, &'static str> {
@@ -267,25 +388,37 @@ async fn shorten(
     }
 
     // Return existing link if URL already shortened
-    let existing = sqlx::query_as::<_, Link>(
-        "SELECT * FROM links WHERE url = $1 ORDER BY created_at ASC LIMIT 1"
-    )
-    .bind(&url)
-    .fetch_optional(&state.db)
-    .await;
+    // Only dedup if this is a permanent link — expiring links always get their own entry
+    if payload.expires_in_minutes.is_none() && payload.max_clicks.is_none() {
+        let existing = sqlx::query_as::<_, Link>(
+            "SELECT * FROM links WHERE url = $1
+             AND expires_at IS NULL AND max_clicks IS NULL
+             ORDER BY created_at ASC LIMIT 1"
+        )
+        .bind(&url)
+        .fetch_optional(&state.db)
+        .await;
 
-    if let Ok(Some(link)) = existing {
-        return Json(ShortenResponse {
-            short_url: format!("{}/{}", state.base_url, link.code),
-            code: link.code,
-        }).into_response();
+        if let Ok(Some(link)) = existing {
+            return Json(ShortenResponse {
+                short_url: format!("{}/{}", state.base_url, link.code),
+                code: link.code,
+            }).into_response();
+        }
     }
 
+    let expires_at = payload.expires_in_minutes.map(|m| {
+        let clamped = m.max(1).min(10080); // 1 min minimum, 1 week maximum
+        chrono::Utc::now() + chrono::Duration::minutes(clamped)
+    });
+
     let result = sqlx::query(
-        "INSERT INTO links (code, url) VALUES ($1, $2)"
+        "INSERT INTO links (code, url, expires_at, max_clicks) VALUES ($1, $2, $3, $4)"
     )
     .bind(&code)
     .bind(&url)
+    .bind(&expires_at)
+    .bind(&payload.max_clicks)
     .execute(&state.db)
     .await;
 
