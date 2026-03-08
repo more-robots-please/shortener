@@ -9,6 +9,7 @@ if (!TOKEN) {
     </div>`;
 } else {
   loadLinks();
+  loadAnalytics();
 }
 
 function login() {
@@ -72,4 +73,66 @@ async function del(id) {
     headers: { 'Authorization': 'Bearer ' + TOKEN }
   });
   loadLinks();
+}
+
+
+async function loadAnalytics() {
+  const res = await fetch('/admin/analytics', {
+    headers: { 'Authorization': 'Bearer ' + TOKEN }
+  });
+  if (!res.ok) return;
+  const d = await res.json();
+
+  // Summary cards
+  document.getElementById('stat-total-links').textContent = d.total_links;
+  document.getElementById('stat-total-clicks').textContent = d.total_clicks;
+  document.getElementById('stat-active').textContent = d.active_links;
+  document.getElementById('stat-expired').textContent = d.expired_links;
+
+  // Clicks per day chart
+  const ctx = document.getElementById('clicks-chart').getContext('2d');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: d.clicks_per_day.map(r => r.day),
+      datasets: [{
+        label: 'clicks',
+        data: d.clicks_per_day.map(r => r.clicks),
+        backgroundColor: '#ff2d78aa',
+        borderColor: '#ff2d78',
+        borderWidth: 1,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#888', font: { family: 'Hack, monospace', size: 10 } }, grid: { color: '#1a1a1a' } },
+        y: { ticks: { color: '#888', font: { family: 'Hack, monospace', size: 10 } }, grid: { color: '#1a1a1a' }, beginAtZero: true }
+      }
+    }
+  });
+
+  // Breakdown lists
+  function renderBreakdown(id, rows) {
+    const el = document.getElementById(id);
+    el.innerHTML = rows.length
+      ? rows.map(r => `<div class="breakdown-row"><span>${r.label}</span><span class="count">${r.count}</span></div>`).join('')
+      : '<div class="breakdown-row"><span style="color:#555">no data yet</span></div>';
+  }
+  renderBreakdown('breakdown-countries', d.top_countries);
+  renderBreakdown('breakdown-browsers', d.top_browsers);
+  renderBreakdown('breakdown-os', d.top_os);
+
+  // Top links
+  const topTable = document.getElementById('top-links-table');
+  topTable.innerHTML = `<tr><th>code</th><th>url</th><th>clicks</th></tr>`;
+  for (const l of d.top_links) {
+    topTable.innerHTML += `<tr>
+      <td><a href="/${l.code}">${l.code}</a></td>
+      <td><a href="${l.url}" target="_blank">${l.url.substring(0, 60)}${l.url.length > 60 ? '...' : ''}</a></td>
+      <td>${l.clicks}</td>
+    </tr>`;
+  }
 }

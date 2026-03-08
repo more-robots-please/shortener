@@ -12,6 +12,7 @@ use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::env;
 use tower_http::services::ServeDir;
 use bcrypt::{hash, verify as bcrypt_verify, DEFAULT_COST};
+use woothee::parser::Parser as UaParser;
 
 // ── Database model ──────────────────────────────────────────────────
 #[derive(Serialize, sqlx::FromRow)]
@@ -82,6 +83,7 @@ async fn main() {
         .route("/admin", get(admin_page))
         .route("/admin/links", get(list_links))
         .route("/admin/links/:id", delete(delete_link))
+        .route("/admin/analytics", get(get_analytics))
         .route("/verify/:code", post(verify_link))
         .nest_service("/static", ServeDir::new("static"))
         .with_state(state);
@@ -144,6 +146,7 @@ async fn index(State(state): State<AppState>) -> Html<String> {
 async fn redirect(
     Path(code): Path<String>,
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
     let result = sqlx::query_as::<_, Link>(
         "SELECT * FROM links WHERE code = $1"
@@ -154,29 +157,39 @@ async fn redirect(
 
     match result {
         Ok(Some(link)) => {
-            // Check time expiry
             if let Some(expires_at) = link.expires_at {
                 if chrono::Utc::now() > expires_at {
                     return expired_page().into_response();
                 }
             }
-            // Check click limit
             if let Some(max) = link.max_clicks {
                 if link.clicks >= max {
                     return expired_page().into_response();
                 }
             }
-            // Check password
             if link.password_hash.is_some() {
                 return password_page(&code).into_response();
             }
-            // Increment clicks and redirect
+
             let _ = sqlx::query(
                 "UPDATE links SET clicks = clicks + 1 WHERE code = $1"
             )
             .bind(&code)
             .execute(&state.db)
             .await;
+
+            // Spawn background task — never blocks the redirect
+            let db = state.db.clone();
+            let ua = headers.get("user-agent")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+            let ip = headers.get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+            let link_id = link.id;
+            tokio::spawn(async move {
+                log_click(db, link_id, ua, ip).await;
+            });
 
             Redirect::permanent(&link.url).into_response()
         }
@@ -373,17 +386,55 @@ async fn admin_page() -> Html<&'static str> {
   <link rel="icon" type="image/png" href="/favicon.png">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/hack-font@3/build/web/hack.css">
   <link rel="stylesheet" href="/static/admin.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 </head>
 <body>
   <h1>seraph / admin</h1>
+
+  <div class="analytics">
+    <h2>overview</h2>
+    <div class="stats-cards">
+      <div class="stat-card"><div class="value" id="stat-total-links">—</div><div class="label">total links</div></div>
+      <div class="stat-card"><div class="value" id="stat-total-clicks">—</div><div class="label">total clicks</div></div>
+      <div class="stat-card"><div class="value" id="stat-active">—</div><div class="label">active links</div></div>
+      <div class="stat-card"><div class="value" id="stat-expired">—</div><div class="label">expired links</div></div>
+    </div>
+
+    <h2>clicks per day — last 30 days</h2>
+    <div class="chart-container">
+      <canvas id="clicks-chart"></canvas>
+    </div>
+
+    <div class="breakdown-grid">
+      <div class="breakdown">
+        <h3>top countries</h3>
+        <div id="breakdown-countries"></div>
+      </div>
+      <div class="breakdown">
+        <h3>top browsers</h3>
+        <div id="breakdown-browsers"></div>
+      </div>
+      <div class="breakdown">
+        <h3>top operating systems</h3>
+        <div id="breakdown-os"></div>
+      </div>
+    </div>
+
+    <h2>top links</h2>
+    <table id="top-links-table" style="margin-bottom:2rem"></table>
+  </div>
+
+  <h2>shorten a url</h2>
   <div class="form">
     <input id="url" placeholder="https://example.com" />
     <input id="code" placeholder="custom code (optional)" style="width:180px" />
     <button onclick="shorten()">shorten</button>
   </div>
   <div id="result"></div>
+
   <h2>all links</h2>
   <table id="links-table"></table>
+
   <script src="/static/admin.js"></script>
   <script async src="https://analytics.seraph.ws/js/pa-p8pHwjggKya5Vyjukouh3.js"></script>
 </body>
@@ -437,6 +488,7 @@ struct VerifyRequest {
 async fn verify_link(
     Path(code): Path<String>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<VerifyRequest>,
 ) -> impl IntoResponse {
     let result = sqlx::query_as::<_, Link>(
@@ -452,13 +504,25 @@ async fn verify_link(
                 Some(hash) => {
                     match bcrypt_verify(&payload.password, &hash) {
                         Ok(true) => {
-                            // Increment clicks
                             let _ = sqlx::query(
-                                "UPDATE links SET clicks = clicks + 1 WHERE code = $1"
+                                    "UPDATE links SET clicks = clicks + 1 WHERE code = $1"
                             )
                             .bind(&code)
                             .execute(&state.db)
                             .await;
+
+                            let db = state.db.clone();
+                            let ua = headers.get("user-agent")
+                                .and_then(|v| v.to_str().ok())
+                                .map(|s| s.to_string());
+                            let ip = headers.get("x-real-ip")
+                                .and_then(|v| v.to_str().ok())
+                                .map(|s| s.to_string());
+                            let link_id = link.id;
+                            tokio::spawn(async move {
+                                log_click(db, link_id, ua, ip).await;
+                            });
+
                             Json(serde_json::json!({ "url": link.url })).into_response()
                         }
                         _ => (StatusCode::UNAUTHORIZED, "incorrect password").into_response(),
@@ -472,6 +536,99 @@ async fn verify_link(
     }
 }
 
+#[derive(Serialize)]
+struct AnalyticsData {
+    total_links: i64,
+    total_clicks: i64,
+    active_links: i64,
+    expired_links: i64,
+    clicks_per_day: Vec<ClicksPerDay>,
+    top_links: Vec<TopLink>,
+    top_countries: Vec<StatRow>,
+    top_browsers: Vec<StatRow>,
+    top_os: Vec<StatRow>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct ClicksPerDay {
+    day: String,
+    clicks: i64,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct TopLink {
+    code: String,
+    url: String,
+    clicks: i32,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct StatRow {
+    label: String,
+    count: i64,
+}
+
+async fn get_analytics(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if !is_authorized(&headers, &state.admin_token) {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    }
+
+    let total_links: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM links")
+        .fetch_one(&state.db).await.unwrap_or(0);
+
+    let total_clicks: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(clicks), 0) FROM links")
+        .fetch_one(&state.db).await.unwrap_or(0);
+
+    let active_links: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM links
+         WHERE (expires_at IS NULL OR expires_at > NOW())
+         AND (max_clicks IS NULL OR clicks < max_clicks)"
+    ).fetch_one(&state.db).await.unwrap_or(0);
+
+    let expired_links = total_links - active_links;
+
+    let clicks_per_day: Vec<ClicksPerDay> = sqlx::query_as(
+        "SELECT TO_CHAR(clicked_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') as day,
+                COUNT(*) as clicks
+         FROM click_events
+         WHERE clicked_at > NOW() - INTERVAL '30 days'
+         GROUP BY day ORDER BY day ASC"
+    ).fetch_all(&state.db).await.unwrap_or_default();
+
+    let top_links: Vec<TopLink> = sqlx::query_as(
+        "SELECT code, url, clicks FROM links ORDER BY clicks DESC LIMIT 10"
+    ).fetch_all(&state.db).await.unwrap_or_default();
+
+    let top_countries: Vec<StatRow> = sqlx::query_as(
+        "SELECT COALESCE(country, 'Unknown') as label, COUNT(*) as count
+         FROM click_events GROUP BY country ORDER BY count DESC LIMIT 10"
+    ).fetch_all(&state.db).await.unwrap_or_default();
+
+    let top_browsers: Vec<StatRow> = sqlx::query_as(
+        "SELECT COALESCE(browser, 'Unknown') as label, COUNT(*) as count
+         FROM click_events GROUP BY browser ORDER BY count DESC LIMIT 10"
+    ).fetch_all(&state.db).await.unwrap_or_default();
+
+    let top_os: Vec<StatRow> = sqlx::query_as(
+        "SELECT COALESCE(os, 'Unknown') as label, COUNT(*) as count
+         FROM click_events GROUP BY os ORDER BY count DESC LIMIT 10"
+    ).fetch_all(&state.db).await.unwrap_or_default();
+
+    Json(AnalyticsData {
+        total_links,
+        total_clicks,
+        active_links,
+        expired_links,
+        clicks_per_day,
+        top_links,
+        top_countries,
+        top_browsers,
+        top_os,
+    }).into_response()
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
@@ -553,4 +710,46 @@ fn password_page(code: &str) -> Html<String> {
   </script>
 </body>
 </html>"#, code = code))
+}
+
+async fn log_click(db: PgPool, link_id: i32, user_agent: Option<String>, ip: Option<String>) {
+    let (browser, os) = match &user_agent {
+        Some(ua) => {
+            let parser = UaParser::new();
+            match parser.parse(ua) {
+                Some(result) => (
+                    Some(result.name.to_string()),
+                    Some(result.os.to_string()),
+                ),
+                None => (None, None),
+            }
+        }
+        None => (None, None),
+    };
+
+    // Resolve country from IP asynchronously
+    let country = if let Some(ip) = ip {
+        let url = format!("http://ip-api.com/json/{}?fields=country", ip);
+        match reqwest::get(&url).await {
+            Ok(res) => {
+                match res.json::<serde_json::Value>().await {
+                    Ok(json) => json["country"].as_str().map(|s: &str| s.to_string()),
+                    Err(_) => None,
+                }
+            }
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
+    let _ = sqlx::query(
+        "INSERT INTO click_events (link_id, country, browser, os) VALUES ($1, $2, $3, $4)"
+    )
+    .bind(link_id)
+    .bind(&country)
+    .bind(&browser)
+    .bind(&os)
+    .execute(&db)
+    .await;
 }

@@ -19,3 +19,14 @@ input:focus { box-shadow: 0 0 8px #ff2d7866; }
 .login input { width: 260px; padding: 8px 12px; font-size: 1rem; }
 .login button { padding: 8px 20px; font-size: 1rem; }
 .expired-badge { color: #555; font-size: 0.8rem; }
+.analytics { margin-bottom: 3rem; }
+.stats-cards { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 2rem; }
+.stat-card { background: #111; border: 1px solid #ff2d78; padding: 1rem 1.5rem; min-width: 160px; }
+.stat-card .value { color: var(--accent); font-size: 2rem; font-weight: bold; }
+.stat-card .label { color: #888; font-size: 0.8rem; margin-top: 0.25rem; }
+.chart-container { background: #111; border: 1px solid #333; padding: 1rem; margin-bottom: 2rem; max-width: 900px; height: 220px; }
+.breakdown-grid { display: flex; gap: 2rem; flex-wrap: wrap; margin-bottom: 2rem; }
+.breakdown { flex: 1; min-width: 200px; }
+.breakdown h3 { color: var(--accent); font-size: 0.85rem; margin-bottom: 0.75rem; }
+.breakdown-row { display: flex; justify-content: space-between; padding: 0.3rem 0; border-bottom: 1px solid #1a1a1a; font-size: 0.85rem; }
+.breakdown-row .count { color: var(--accent); }
