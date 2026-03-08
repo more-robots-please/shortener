@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::env;
 use tower_http::services::ServeDir;
+use bcrypt::{hash, verify as bcrypt_verify, DEFAULT_COST};
 
 // ── Database model ──────────────────────────────────────────────────
 #[derive(Serialize, sqlx::FromRow)]
@@ -22,6 +23,7 @@ struct Link {
     created_at: chrono::DateTime<chrono::Utc>,
     expires_at: Option<chrono::DateTime<chrono::Utc>>,
     max_clicks: Option<i32>,
+    password_hash: Option<String>,
 }
 
 // ── Request/response types ───────────────────────────────────────────
@@ -31,6 +33,7 @@ struct ShortenRequest {
     code: Option<String>,
     expires_in_minutes: Option<i64>,
     max_clicks: Option<i32>,
+    password: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -79,6 +82,7 @@ async fn main() {
         .route("/admin", get(admin_page))
         .route("/admin/links", get(list_links))
         .route("/admin/links/:id", delete(delete_link))
+        .route("/verify/:code", post(verify_link))
         .nest_service("/static", ServeDir::new("static"))
         .with_state(state);
 
@@ -124,6 +128,7 @@ async fn index(State(state): State<AppState>) -> Html<String> {
         </select>
       </div>
       <input id="max-clicks" type="number" placeholder="max clicks (optional)" autocomplete="off" min="1" style="width:180px" />
+      <input id="password" type="password" placeholder="password (optional)" autocomplete="off" style="width:200px" />
       <button onclick="shorten()">shorten</button>
     </div>
     <div id="result"></div>
@@ -160,6 +165,10 @@ async fn redirect(
                 if link.clicks >= max {
                     return expired_page().into_response();
                 }
+            }
+            // Check password
+            if link.password_hash.is_some() {
+                return password_page(&code).into_response();
             }
             // Increment clicks and redirect
             let _ = sqlx::query(
@@ -317,20 +326,31 @@ async fn shorten(
     }
 
     let expires_at = payload.expires_in_minutes.map(|m| {
-        let clamped = m.max(1).min(10080); // 1 min minimum, 1 week maximum
+        let clamped = m.max(1).min(10080);
         chrono::Utc::now() + chrono::Duration::minutes(clamped)
     });
 
+    let password_hash = match payload.password.as_deref() {
+        Some(p) if !p.is_empty() => {
+            match hash(p, DEFAULT_COST) {
+                Ok(h) => Some(h),
+                Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to hash password").into_response(),
+            }
+        }
+        _ => None,
+    };
+
     let result = sqlx::query(
-        "INSERT INTO links (code, url, expires_at, max_clicks) VALUES ($1, $2, $3, $4)"
+        "INSERT INTO links (code, url, expires_at, max_clicks, password_hash) VALUES ($1, $2, $3, $4, $5)"
     )
     .bind(&code)
     .bind(&url)
     .bind(&expires_at)
     .bind(&payload.max_clicks)
+    .bind(&password_hash)
     .execute(&state.db)
     .await;
-
+    
     match result {
         Ok(_) => Json(ShortenResponse {
             short_url: format!("{}/{}", state.base_url, code),
@@ -408,6 +428,51 @@ async fn delete_link(
     }
 }
 
+
+#[derive(Deserialize)]
+struct VerifyRequest {
+    password: String,
+}
+
+async fn verify_link(
+    Path(code): Path<String>,
+    State(state): State<AppState>,
+    Json(payload): Json<VerifyRequest>,
+) -> impl IntoResponse {
+    let result = sqlx::query_as::<_, Link>(
+        "SELECT * FROM links WHERE code = $1"
+    )
+    .bind(&code)
+    .fetch_optional(&state.db)
+    .await;
+
+    match result {
+        Ok(Some(link)) => {
+            match link.password_hash {
+                Some(hash) => {
+                    match bcrypt_verify(&payload.password, &hash) {
+                        Ok(true) => {
+                            // Increment clicks
+                            let _ = sqlx::query(
+                                "UPDATE links SET clicks = clicks + 1 WHERE code = $1"
+                            )
+                            .bind(&code)
+                            .execute(&state.db)
+                            .await;
+                            Json(serde_json::json!({ "url": link.url })).into_response()
+                        }
+                        _ => (StatusCode::UNAUTHORIZED, "incorrect password").into_response(),
+                    }
+                }
+                None => (StatusCode::BAD_REQUEST, "link is not password protected").into_response(),
+            }
+        }
+        Ok(None) => (StatusCode::NOT_FOUND, "link not found").into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "database error").into_response(),
+    }
+}
+
+
 // ── Helpers ───────────────────────────────────────────────────────────
 
 fn is_authorized(headers: &HeaderMap, admin_token: &str) -> bool {
@@ -416,4 +481,76 @@ fn is_authorized(headers: &HeaderMap, admin_token: &str) -> bool {
         .and_then(|v| v.to_str().ok())
         .map(|v| v == format!("Bearer {}", admin_token))
         .unwrap_or(false)
+}
+
+
+fn password_page(code: &str) -> Html<String> {
+    Html(format!(r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>seraph / protected link</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/hack-font@3/build/web/hack.css">
+  <link rel="stylesheet" href="/static/error.css">
+  <style>
+    input {{ background: #111; color: #e0e0e0; border: 1px solid #ff2d78; padding: 8px 12px; font-family: 'Hack', monospace; font-size: 0.9rem; outline: none; width: 220px; }}
+    input:focus {{ box-shadow: 0 0 8px #ff2d7866; }}
+    button {{ background: #ff2d78; color: #0a0a0a; border: none; padding: 8px 18px; cursor: pointer; font-family: 'Hack', monospace; font-size: 0.9rem; transition: box-shadow 0.2s; margin-top: 0.5rem; }}
+    button:hover {{ box-shadow: 0 0 12px #ff2d78, 0 0 24px #ff2d7866; }}
+    .error-msg {{ color: #ff6b6b; font-size: 0.85rem; min-height: 1rem; }}
+    form {{ display: flex; flex-direction: column; align-items: center; gap: 0.75rem; }}
+  </style>
+</head>
+<body>
+  <header>
+    <a class="logo" href="https://seraph.ws">seraph</a>
+    <div class="barcode"></div>
+  </header>
+  <main>
+    <h1>protected link</h1>
+    <p class="prompt">enter the password to continue</p>
+    <form onsubmit="return false">
+      <input id="password" type="password" placeholder="password" autocomplete="current-password" />
+      <button onclick="verify()">unlock</button>
+      <div class="error-msg" id="error"></div>
+    </form>
+  </main>
+  <script>
+    const CODE = "{code}";
+    const SESSION_KEY = "pwd:" + CODE;
+
+    // Auto-submit if we verified this session already
+    const saved = sessionStorage.getItem(SESSION_KEY);
+    if (saved) submitPassword(saved);
+
+    async function verify() {{
+      const password = document.getElementById('password').value;
+      if (!password) return;
+      await submitPassword(password);
+    }}
+
+    async function submitPassword(password) {{
+      const res = await fetch('/verify/' + CODE, {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ password }})
+      }});
+      if (res.ok) {{
+        sessionStorage.setItem(SESSION_KEY, password);
+        const data = await res.json();
+        window.location.href = data.url;
+      }} else {{
+        sessionStorage.removeItem(SESSION_KEY);
+        document.getElementById('error').textContent = 'incorrect password';
+        document.getElementById('password').value = '';
+        document.getElementById('password').focus();
+      }}
+    }}
+
+    document.addEventListener('keydown', e => {{ if (e.key === 'Enter') verify(); }});
+  </script>
+</body>
+</html>"#, code = code))
 }

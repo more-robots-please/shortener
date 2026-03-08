@@ -21,7 +21,8 @@ async function shorten() {
       url,
       code: code || null,
       expires_in_minutes: expiresMinutes,
-      max_clicks: maxClicks
+      max_clicks: maxClicks,
+      password: document.getElementById('password').value || null
     })
   });
 

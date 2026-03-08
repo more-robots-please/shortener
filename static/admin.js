@@ -29,7 +29,7 @@ async function loadLinks() {
   const links = await res.json();
   const table = document.getElementById('links-table');
   table.innerHTML = `<tr>
-    <th>code</th><th>url</th><th>clicks</th><th>created</th><th>expires</th><th>max clicks</th><th></th>
+    <th>code</th><th>url</th><th>clicks</th><th>created</th><th>expires</th><th>max clicks</th><th>pw</th><th></th>
   </tr>`;
   for (const l of links) {
     const expired = (l.expires_at && new Date(l.expires_at) < new Date())
@@ -45,6 +45,7 @@ async function loadLinks() {
       <td>${new Date(l.created_at).toLocaleDateString()}</td>
       <td>${expiresAt}</td>
       <td>${maxClicks}</td>
+      <td>${l.password_hash ? '🔒' : '—'}</td>
       <td><button onclick="del(${l.id})">delete</button></td>
     </tr>`;
   }
