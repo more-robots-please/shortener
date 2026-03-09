@@ -133,7 +133,12 @@ async fn index(State(state): State<AppState>) -> Html<String> {
       <input id="password" type="password" placeholder="password (optional)" autocomplete="off" style="width:200px" />
       <button onclick="shorten()">shorten</button>
     </div>
+    <div style="display:flex;align-items:center;gap:0.5rem;font-size:0.9rem;color:#aaa">
+      <input type="checkbox" id="gen-qr" style="accent-color:#ff2d78;width:16px;height:16px;cursor:pointer" />
+      <label for="gen-qr">generate qr code</label>
+    </div>
     <div id="result"></div>
+    <div id="qr-result" style="display:flex;flex-direction:column;align-items:center"></div>
     <p><a href="https://seraph.ws">← back to seraph.ws</a></p>
   </main>
   <footer><a href="https://seraph.ws">seraph.ws</a></footer>
